@@ -1,0 +1,394 @@
+"""Report generator — HTML and terminal output.
+
+Generates styled HTML reports with dark gradient theme and severity badges,
+matching the WinnyTool report aesthetic. Also provides ANSI-colored terminal output.
+"""
+
+import html
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from core import __version__, logger
+from core.grading import GradeResult, grade_color, grade_color_hex, CATEGORIES
+from core.sysinfo import SystemInfo, format_uptime
+
+
+REPORT_DIR = Path.home() / "LinnyTool_Reports"
+
+RESET = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+
+SEVERITY_COLORS = {
+    "Critical": ("\033[91m", "#dc3545"),
+    "High":     ("\033[93m", "#fd7e14"),
+    "Medium":   ("\033[33m", "#ffc107"),
+    "Low":      ("\033[94m", "#17a2b8"),
+    "Info":     ("\033[90m", "#6c757d"),
+}
+
+
+def generate_html_report(
+    sysinfo: Optional[SystemInfo] = None,
+    grade_result: Optional[GradeResult] = None,
+    findings: Optional[list[dict]] = None,
+    output_dir: Path = REPORT_DIR,
+) -> Path:
+    """Generate full HTML report with embedded CSS."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"LinnyTool_Report_{timestamp}.html"
+    filepath = output_dir / filename
+
+    sections = []
+
+    # Grade section
+    if grade_result:
+        sections.append(_html_grade_section(grade_result))
+
+    # System info section
+    if sysinfo:
+        sections.append(_html_sysinfo_section(sysinfo))
+
+    # Category breakdown
+    if grade_result:
+        sections.append(_html_category_section(grade_result))
+
+    # Findings table
+    if findings:
+        sections.append(_html_findings_section(findings))
+
+    body = "\n".join(sections)
+    report_html = _html_template(body, timestamp)
+    filepath.write_text(report_html, encoding="utf-8")
+
+    logger.info("HTML report generated: %s", filepath)
+    return filepath
+
+
+def generate_terminal_report(
+    grade_result: Optional[GradeResult] = None,
+    findings: Optional[list[dict]] = None,
+    sysinfo: Optional[SystemInfo] = None,
+) -> str:
+    """Generate ANSI-colored terminal report."""
+    lines = []
+    lines.append("")
+    lines.append(f"{BOLD}{'=' * 60}{RESET}")
+    lines.append(f"{BOLD}  LinnyTool Security Report{RESET}")
+    lines.append(f"{BOLD}{'=' * 60}{RESET}")
+    lines.append("")
+
+    # System info
+    if sysinfo:
+        lines.append(f"  Host:    {sysinfo.hostname}")
+        if sysinfo.distro:
+            lines.append(f"  Distro:  {sysinfo.distro.display_name}")
+        lines.append(f"  Kernel:  {sysinfo.kernel_version}")
+        lines.append(f"  Uptime:  {format_uptime(sysinfo.uptime_seconds)}")
+        lines.append("")
+
+    # Grade
+    if grade_result:
+        gc = grade_color(grade_result.overall_grade)
+        lines.append(f"  Overall Grade: {gc}{BOLD}{grade_result.overall_grade}{RESET} ({grade_result.overall_score:.1f}/100)")
+        lines.append("")
+
+        # Category breakdown
+        lines.append(f"  {BOLD}Category Scores:{RESET}")
+        for cat in grade_result.categories:
+            if cat.findings_pass + cat.findings_fail == 0:
+                continue
+            bar_len = int(cat.final_score / 100 * 30)
+            bar = "\033[42m" + " " * bar_len + RESET + "\033[41m" + " " * (30 - bar_len) + RESET
+            lines.append(f"    {cat.name:<25s} {bar} {cat.final_score:5.1f}")
+        lines.append("")
+
+        # Severity counts
+        lines.append(f"  {BOLD}Findings:{RESET} {grade_result.total_pass} pass, {grade_result.total_fail} fail")
+        if grade_result.critical_count:
+            lines.append(f"    {SEVERITY_COLORS['Critical'][0]}Critical: {grade_result.critical_count}{RESET}")
+        if grade_result.high_count:
+            lines.append(f"    {SEVERITY_COLORS['High'][0]}High:     {grade_result.high_count}{RESET}")
+        if grade_result.medium_count:
+            lines.append(f"    {SEVERITY_COLORS['Medium'][0]}Medium:   {grade_result.medium_count}{RESET}")
+        if grade_result.low_count:
+            lines.append(f"    {SEVERITY_COLORS['Low'][0]}Low:      {grade_result.low_count}{RESET}")
+        lines.append("")
+
+    # Findings detail (failed only)
+    if findings:
+        failed = [f for f in findings if f.get("status") in ("Fail", "Error")]
+        if failed:
+            lines.append(f"  {BOLD}Failed Checks:{RESET}")
+            lines.append(f"  {'Check':<30s} {'Severity':<10s} {'Description'}")
+            lines.append(f"  {'-' * 78}")
+            for f in failed[:30]:
+                sev = f.get("severity", "Info")
+                color = SEVERITY_COLORS.get(sev, ("", ""))[0]
+                name = f.get("check_name", "")[:28]
+                desc = f.get("description", "")[:40]
+                lines.append(f"  {name:<30s} {color}{sev:<10s}{RESET} {desc}")
+            if len(failed) > 30:
+                lines.append(f"  ... and {len(failed) - 30} more")
+            lines.append("")
+
+    lines.append(f"{DIM}  Generated by LinnyTool v{__version__} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{RESET}")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ============================================================================
+# HTML HELPERS
+# ============================================================================
+
+def _html_template(body: str, timestamp: str) -> str:
+    """Full HTML template with embedded CSS."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LinnyTool Security Report</title>
+<style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    color: #e0e0e0;
+    min-height: 100vh;
+    padding: 2rem;
+}}
+.container {{
+    max-width: 1100px;
+    margin: 0 auto;
+}}
+.header {{
+    text-align: center;
+    margin-bottom: 2rem;
+    padding: 2rem;
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.1);
+}}
+.header h1 {{
+    font-size: 2rem;
+    color: #4fc3f7;
+    margin-bottom: 0.5rem;
+}}
+.header .timestamp {{
+    color: #888;
+    font-size: 0.9rem;
+}}
+.card {{
+    background: rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}}
+.card h2 {{
+    color: #4fc3f7;
+    margin-bottom: 1rem;
+    font-size: 1.3rem;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    padding-bottom: 0.5rem;
+}}
+.grade-circle {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin: 1rem;
+}}
+.grade-score {{
+    font-size: 1.2rem;
+    color: #aaa;
+    margin-top: 0.5rem;
+}}
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}}
+th {{
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    background: rgba(255,255,255,0.08);
+    color: #4fc3f7;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}}
+td {{
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.9rem;
+}}
+tr:nth-child(even) {{
+    background: rgba(255,255,255,0.02);
+}}
+.badge {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}}
+.badge-critical {{ background: #dc3545; color: white; }}
+.badge-high {{ background: #fd7e14; color: white; }}
+.badge-medium {{ background: #ffc107; color: #333; }}
+.badge-low {{ background: #17a2b8; color: white; }}
+.badge-info {{ background: #6c757d; color: white; }}
+.badge-pass {{ background: #28a745; color: white; }}
+.badge-fail {{ background: #dc3545; color: white; }}
+.bar-container {{
+    background: rgba(255,255,255,0.1);
+    border-radius: 4px;
+    height: 20px;
+    overflow: hidden;
+    position: relative;
+}}
+.bar-fill {{
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.5s;
+}}
+.footer {{
+    text-align: center;
+    color: #666;
+    padding: 2rem 0;
+    font-size: 0.85rem;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>LinnyTool Security Report</h1>
+        <div class="timestamp">Generated {timestamp} | LinnyTool v{__version__}</div>
+    </div>
+    {body}
+    <div class="footer">
+        LinnyTool v{__version__} &mdash; Linux Security Hardening, Auditing &amp; Grading
+    </div>
+</div>
+</body>
+</html>"""
+
+
+def _html_grade_section(grade: GradeResult) -> str:
+    """Render grade circle and summary."""
+    color = grade_color_hex(grade.overall_grade)
+    return f"""<div class="card" style="text-align: center;">
+    <h2>Security Grade</h2>
+    <div class="grade-circle" style="border: 4px solid {color}; color: {color};">
+        {html.escape(grade.overall_grade)}
+    </div>
+    <div class="grade-score">{grade.overall_score:.1f} / 100</div>
+    <div style="margin-top: 1rem; color: #aaa;">
+        {grade.total_pass} checks passed &bull; {grade.total_fail} checks failed
+    </div>
+</div>"""
+
+
+def _html_sysinfo_section(info: SystemInfo) -> str:
+    """Render system information table."""
+    rows = []
+
+    def row(label, value):
+        rows.append(f"<tr><td><strong>{html.escape(label)}</strong></td><td>{html.escape(str(value))}</td></tr>")
+
+    row("Hostname", info.hostname)
+    if info.distro:
+        row("Distribution", info.distro.display_name)
+        row("Family", info.distro.family.value.upper())
+        row("Package Manager", info.distro.pkg_manager.value)
+    row("Kernel", info.kernel_version)
+    row("Architecture", info.architecture)
+    row("CPU", f"{info.cpu_model} ({info.cpu_cores} cores)")
+    row("RAM", f"{info.ram_total_mb} MB total, {info.ram_available_mb} MB available")
+    row("Uptime", format_uptime(info.uptime_seconds))
+    row("Last Boot", info.last_boot)
+
+    if info.mac_status:
+        row("MAC Framework", f"{info.mac_status.framework} ({info.mac_status.mode})")
+    if info.firewall_status:
+        row("Firewall", f"{info.firewall_status.tool} ({'active' if info.firewall_status.active else 'inactive'})")
+
+    # Security tools
+    installed = [name for name, avail in info.security_tools.items() if avail]
+    if installed:
+        row("Security Tools", ", ".join(installed))
+
+    return f"""<div class="card">
+    <h2>System Information</h2>
+    <table>{''.join(rows)}</table>
+</div>"""
+
+
+def _html_category_section(grade: GradeResult) -> str:
+    """Render category score bars."""
+    bars = []
+    for cat in grade.categories:
+        if cat.findings_pass + cat.findings_fail == 0:
+            continue
+        score = cat.final_score
+        if score >= 80:
+            color = "#28a745"
+        elif score >= 60:
+            color = "#ffc107"
+        elif score >= 40:
+            color = "#fd7e14"
+        else:
+            color = "#dc3545"
+
+        bars.append(f"""<tr>
+    <td style="width: 200px;"><strong>{html.escape(cat.name)}</strong></td>
+    <td>
+        <div class="bar-container">
+            <div class="bar-fill" style="width: {score}%; background: {color};"></div>
+        </div>
+    </td>
+    <td style="width: 80px; text-align: right;">{score:.0f}</td>
+</tr>""")
+
+    return f"""<div class="card">
+    <h2>Category Breakdown</h2>
+    <table>{''.join(bars)}</table>
+</div>"""
+
+
+def _html_findings_section(findings: list[dict]) -> str:
+    """Render findings table."""
+    rows = []
+    for f in findings:
+        status = f.get("status", "")
+        severity = f.get("severity", "Info")
+        sev_class = severity.lower()
+        status_class = "pass" if status == "Pass" else "fail"
+
+        rows.append(f"""<tr>
+    <td><span class="badge badge-{status_class}">{html.escape(status)}</span></td>
+    <td><span class="badge badge-{sev_class}">{html.escape(severity)}</span></td>
+    <td>{html.escape(f.get('category', ''))}</td>
+    <td>{html.escape(f.get('check_name', ''))}</td>
+    <td>{html.escape(f.get('description', '')[:80])}</td>
+</tr>""")
+
+    return f"""<div class="card">
+    <h2>Detailed Findings ({len(findings)} total)</h2>
+    <table>
+        <tr><th>Status</th><th>Severity</th><th>Category</th><th>Check</th><th>Description</th></tr>
+        {''.join(rows)}
+    </table>
+</div>"""

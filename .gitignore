@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+*.db
+reports/*.html
+data/cisa_kev_cache.json
+data/settings.json
+.venv/
+.env
+*.log
