@@ -86,7 +86,7 @@ def _update_repos(profile: DistroProfile) -> bool:
         return False
 
     logger.info("Updating package repositories...")
-    result = run_command(cmd, timeout=300)
+    result = run_command(cmd, timeout=600)
     # dnf check-update returns 100 if updates available (not an error)
     if profile.pkg_manager == PkgManager.DNF:
         return result.returncode in (0, 100)
@@ -116,7 +116,7 @@ def install_package(pkg_name: str, profile: DistroProfile) -> bool:
 
     cmd = base_cmd + [pkg_name]
     logger.info("Installing: %s", pkg_name)
-    result = run_command(cmd, timeout=300)
+    result = run_command(cmd, timeout=900)
 
     if result.returncode == 0:
         logger.info("Installed: %s", pkg_name)
