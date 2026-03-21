@@ -26,7 +26,7 @@ class Package:
 
 # Master package table
 PACKAGES: list[Package] = [
-    Package("openscap-scanner", "libopenscap8", "openscap-scanner", "openscap", "openscap-utils",
+    Package("openscap-scanner", "openscap-scanner", "openscap-scanner", "openscap", "openscap-utils",
             description="OpenSCAP security compliance scanner"),
     Package("scap-security-guide", "ssg-debderived", "scap-security-guide", "scap-security-guide", "scap-security-guide",
             description="SCAP Security Guide content (CIS/STIG profiles)"),
