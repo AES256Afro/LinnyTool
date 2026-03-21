@@ -5,6 +5,7 @@ fail2ban, rkhunter, chkrootkit, ClamAV, and firewall tools.
 """
 
 import shutil
+import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -116,7 +117,16 @@ def install_package(pkg_name: str, profile: DistroProfile) -> bool:
 
     cmd = base_cmd + [pkg_name]
     logger.info("Installing: %s", pkg_name)
-    result = run_command(cmd, timeout=900)
+
+    try:
+        result = run_command(cmd, timeout=900)
+    except subprocess.TimeoutExpired:
+        logger.warning("Install timed out for %s (may still be running in background)", pkg_name)
+        # Check if it actually installed despite the timeout (post-install hooks can be slow)
+        if _is_installed(pkg_name, profile):
+            logger.info("Package %s installed successfully (post-install hook was slow)", pkg_name)
+            return True
+        return False
 
     if result.returncode == 0:
         logger.info("Installed: %s", pkg_name)
